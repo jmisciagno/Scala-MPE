@@ -9,10 +9,20 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <string>
+using namespace std;
 
 //==============================================================================
 /**
 */
+class Scale {      
+  public:             
+    string description;
+    int count;
+    double scale_array[128];
+    int i = 0;
+};
+
 class NewProjectAudioProcessor  : public juce::AudioProcessor
 {
 public:
@@ -20,6 +30,9 @@ public:
     NewProjectAudioProcessor();
     ~NewProjectAudioProcessor() override;
 
+    //==============================================================================
+    int loadFile(string filename);
+    
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -53,7 +66,15 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    string path;
+    int error;
+    string message;
+    
 private:
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessor)
+    juce::ValueTree state;
+    bool loaded = false;
+    Scale scale;
+    int midi_note;
 };

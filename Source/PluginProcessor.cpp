@@ -13,20 +13,7 @@
 #include <string>
 #include <vector>
 #include <math.h>
-
 using namespace std;
-
-class Scale {      
-  public:             
-    string description;
-    int count;
-    double scale_array[128];
-    int i = 0;
-};
-
-Scale scale;
-ifstream myfile("/Users/johnmisciagno/scala/scl/test.scl");
-int midi_note;
 
 int isComment(string str)
 {
@@ -35,7 +22,7 @@ int isComment(string str)
 
 double interpretValue(string str)
 {
-    if (str.find('.') != std::string::npos)
+    if (str.find('.') != string::npos)
     {
         return stof(str) / 100;
     }
@@ -84,19 +71,20 @@ int interpretFile(Scale *scale, ifstream *file)
 {
   string line;
   int line_num = 0;
-  if (file->is_open())
+  if (file->good())
   {
+    bool has_error = true;
     while (getline(*file, line))
     {
+      has_error = false;
       if (!isComment(line))
       {
 	    interpretLine(scale, line, line_num);
         line_num++;
       }
     }
-    file->close();
     cout << "\n";
-    return 0;
+    return has_error; // return 1 if error
   }
 
   else
@@ -115,24 +103,28 @@ double scale_value(double value, double dmin, double dmax, double cmin, double c
 
 double semitones_to_pitchbend(double value)
 {
-  return value * (170 + 2/3);
+  return value * (512/3);
 }
 
 double pitchbend_to_semitones(double value)
 {
-  return value / (170 + 2/3);
+  return value / (512/3);
 }
 
-double midi_note_scala(int midi_note)
+double midi_note_scala(Scale *scale, int midi_note)
 {
-  return scale.scale_array[midi_note % scale.count] + (floor(midi_note / scale.count) * 12);
+  return scale->scale_array[midi_note % scale->count] + (floor(midi_note / scale->count) * 12);
 }
 
-double new_pitchbend(int midi_note, int pitchbend)
+double new_pitchbend(Scale *scale, int midi_note, int pitchbend)
 {
   double midi_note_f = midi_note + pitchbend_to_semitones(pitchbend - 8192);
-  double new_midi_note_f = scale_value(midi_note_f, floor(midi_note_f), ceil(midi_note_f + .001), midi_note_scala(floor(midi_note_f)), midi_note_scala(ceil(midi_note_f + .001)));
-  return 8192 + semitones_to_pitchbend(new_midi_note_f - midi_note);
+  double new_midi_note_f = scale_value(midi_note_f,
+                                       floor(midi_note_f),
+                                       ceil(midi_note_f + .001),
+                                       midi_note_scala(scale, floor(midi_note_f)),
+                                       midi_note_scala(scale, ceil(midi_note_f + .001)));
+  return semitones_to_pitchbend(new_midi_note_f - midi_note) + 8192;
 }
 
 
@@ -149,7 +141,7 @@ NewProjectAudioProcessor::NewProjectAudioProcessor()
                        )
 #endif
 {
-    interpretFile(&scale, &myfile);
+    state = juce::ValueTree ("ScalaMPE");
 }
 
 NewProjectAudioProcessor::~NewProjectAudioProcessor()
@@ -157,6 +149,14 @@ NewProjectAudioProcessor::~NewProjectAudioProcessor()
 }
 
 //==============================================================================
+int NewProjectAudioProcessor::loadFile(string filename)
+{
+    ifstream myfile(filename);
+    loaded = !interpretFile(&scale, &myfile);  // file was loaded if there is no error
+    myfile.close();
+    return !loaded;  // return 1 if error;
+}
+
 const juce::String NewProjectAudioProcessor::getName() const
 {
     return JucePlugin_Name;
@@ -260,9 +260,10 @@ bool NewProjectAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
 void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     buffer.clear();
-    
     juce::MidiBuffer processedMidi;
                 
+    if (!loaded) return;  // Do nothing if file was note loaded.
+    
     for (const auto metadata : midiMessages)
     {
         auto message = metadata.getMessage();
@@ -274,7 +275,7 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                                                  message.getNoteNumber(),
                                                  message.getVelocity());
             midi_note = message.getNoteNumber();
-            double updated_pitchbend = new_pitchbend(midi_note, 8192);
+            double updated_pitchbend = new_pitchbend(&scale, midi_note, 8192);
             processedMidi.addEvent (juce::MidiMessage::pitchWheel(message.getChannel(), updated_pitchbend), time);
             processedMidi.addEvent (message, time);
         }
@@ -283,14 +284,14 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             message = juce::MidiMessage::noteOff (message.getChannel(),
                                                   message.getNoteNumber(),
                                                   message.getVelocity());
-            processedMidi.addEvent (message, time);
+            processedMidi.addEvent(message, time);
         }
         if (message.isPitchWheel()) // 0 - 16384 (Roli has range of 4 octaves), 8192 is neutral
         {
             double pitchbend = message.getPitchWheelValue();
-            double updated_pitchbend = new_pitchbend(midi_note, pitchbend);
+            double updated_pitchbend = new_pitchbend(&scale, midi_note, pitchbend);
             
-            processedMidi.addEvent (juce::MidiMessage::pitchWheel(message.getChannel(), updated_pitchbend), time);
+            processedMidi.addEvent(juce::MidiMessage::pitchWheel(message.getChannel(), updated_pitchbend), time);
         }
     }
     midiMessages.swapWith (processedMidi);
@@ -310,15 +311,52 @@ juce::AudioProcessorEditor* NewProjectAudioProcessor::createEditor()
 //==============================================================================
 void NewProjectAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    // Save text in tree
+    if (error) 
+    {
+        state.removeProperty("path", nullptr);
+    }
+    if (!error) state.setProperty("path", juce::var(path), nullptr);
+   
+    // Save tre
+    juce::MemoryOutputStream stream(destData, false);
+    state.writeToStream (stream);  
 }
 
-void NewProjectAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void NewProjectAudioProcessor::setStateInformation (const void* data, int sizeInBytes) 
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    // get editor    
+    NewProjectAudioProcessorEditor *editor =
+        dynamic_cast<NewProjectAudioProcessorEditor*>(getActiveEditor()); 
+       
+    // Load tree
+    juce::ValueTree tree = juce::ValueTree::readFromData(data, sizeInBytes); 
+    
+    if (tree.isValid())  
+    {
+        // Load state 
+         state = tree;
+          
+        // Load path
+        if (tree.hasProperty("path"))
+        {  
+           path =  state.getProperty("path").toString().toStdString();
+           error = this->loadFile(path);
+            if (error)
+            { 
+                message = "Error loading file...reverting to 12-ET.";
+                if (editor != NULL) editor->errorText.setColour (juce::Label::textColourId, juce::Colours::orange);
+                if (editor != NULL) editor->errorText.setText (message, juce::dontSendNotification);
+            }
+            else 
+            { 
+                string filename =  path.substr(path.find_last_of("/\\") + 1);
+                message = "Sucessfully loaded: " + filename;
+                if (editor != NULL) editor->errorText.setColour (juce::Label::textColourId, juce::Colours::lightgreen);
+                if (editor != NULL) editor->errorText.setText (message, juce::dontSendNotification);
+            }
+        }
+    }
 }
 
 //==============================================================================
