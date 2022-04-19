@@ -279,19 +279,23 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
             processedMidi.addEvent (juce::MidiMessage::pitchWheel(message.getChannel(), updated_pitchbend), time);
             processedMidi.addEvent (message, time);
         }
-        if (message.isNoteOff())
+        else if (message.isNoteOff())
         {
             message = juce::MidiMessage::noteOff (message.getChannel(),
                                                   message.getNoteNumber(),
                                                   message.getVelocity());
             processedMidi.addEvent(message, time);
         }
-        if (message.isPitchWheel()) // 0 - 16384 (Roli has range of 4 octaves), 8192 is neutral
+        else if (message.isPitchWheel()) // 0 - 16384 (Roli has range of 4 octaves), 8192 is neutral
         {
             double pitchbend = message.getPitchWheelValue();
             double updated_pitchbend = new_pitchbend(&scale, midi_note[message.getChannel()-1], pitchbend);
             
             processedMidi.addEvent(juce::MidiMessage::pitchWheel(message.getChannel(), updated_pitchbend), time);
+        }
+        else
+        {
+            processedMidi.addEvent(message, time);
         }
     }
     midiMessages.swapWith (processedMidi);
