@@ -54,14 +54,13 @@ int interpretLine(Scale *scale, string line, int line_num)
   }
   else
   {
-    if (scale->i == 0)
+    if (scale->i+1 < scale->count)
     {
-      scale->scale_array[0] = 0.0;
-      scale->i++;
+      scale->scale_array[++scale->i] = interpretValue(line);
     }
-    if (scale->i < 12)
+    else if (scale->i+1 == scale->count)
     {
-      scale->scale_array[scale->i++] = interpretValue(line);
+        scale->scale_array[0] = interpretValue(line) - 12;
     }
   }
     return 0;
